@@ -1,0 +1,22 @@
+# environments
+venv/
+myenv/
+
+# python cache
+__pycache__/
+
+# outputs
+outputs/
+
+# model weights
+*.pt
+*.pth
+
+# dataset
+data/
+
+# installers
+Miniconda3-*.sh
+
+# misc
+.env
