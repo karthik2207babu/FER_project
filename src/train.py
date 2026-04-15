@@ -120,7 +120,7 @@ def train_model():
     model = FERFullPipeline().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
 
     history = {'train_loss': [], 'train_acc': [], 'val_acc': []}
     best_acc = 0.0
