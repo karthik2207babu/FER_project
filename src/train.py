@@ -27,10 +27,10 @@ class FERFullPipeline(nn.Module):
     """Wraps all your modules into one clean model for training."""
     def __init__(self):
         super().__init__()
-        # 1. Backbone (Initialized with random weights for training)
+        # Backbone (Initialized with random weights, but will be overwritten by your checkpoint)
         self.backbone = resnet18(weights=None)
         
-        # 2. Custom Modules
+        # Custom Modules
         self.lfa = LocalFeatureAugmentation(channels=128)
         self.msgc = MultiScaleGlobalConvolution(channels=128)
         self.safm = SpatialAttentionFeatureModule()
@@ -39,7 +39,6 @@ class FERFullPipeline(nn.Module):
         self.classifier = EmotionClassifier(embed_dim=64, num_classes=7)
 
     def forward(self, x):
-        # ResNet up to layer 2 (Outputs 128x28x28)
         x = self.backbone.conv1(x)
         x = self.backbone.bn1(x)
         x = self.backbone.relu(x)
@@ -47,7 +46,6 @@ class FERFullPipeline(nn.Module):
         x = self.backbone.layer1(x)
         x = self.backbone.layer2(x)
         
-        # Custom Pipeline
         x = self.lfa(x)
         x = self.msgc(x)
         x = self.safm(x)
@@ -64,15 +62,17 @@ def train_model():
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=0.0001) # Lowered slightly for more stable early training
+    parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--save-dir", type=Path, default=Path("/content/drive/MyDrive/FER_Checkpoints"))
+    
+    # NEW: The flag for Transfer Learning!
+    parser.add_argument("--checkpoint", type=Path, default=None, help="Path to pre-trained weights")
     args = parser.parse_args()
 
     # Setup Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🚀 Starting training on: {device}")
     
-    # Create save directory in your Google Drive
     args.save_dir.mkdir(parents=True, exist_ok=True)
 
     # Load Data
@@ -83,8 +83,14 @@ def train_model():
         batch_size=args.batch_size
     )
 
-    # Initialize Model, Loss, and Optimizer
+    # Initialize Model
     model = FERFullPipeline().to(device)
+    
+    # NEW: Load the pre-trained brain if you passed the --checkpoint flag
+    if args.checkpoint is not None and args.checkpoint.exists():
+        print(f"🧠 Loading pre-trained weights from {args.checkpoint}...")
+        model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=True))
+
     criterion = nn.CrossEntropyLoss()
     optimizer = Adam(model.parameters(), lr=args.lr)
 
@@ -134,7 +140,7 @@ def train_model():
         test_acc = 100 * test_correct / test_total
         print(f"Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}%")
 
-        # Save Checkpoint to Google Drive
+        # Save Checkpoint
         if test_acc > best_acc:
             best_acc = test_acc
             save_path = args.save_dir / f"best_{args.dataset_type.lower()}_model.pt"
