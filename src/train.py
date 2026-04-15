@@ -7,7 +7,13 @@ from pathlib import Path
 import torch
 from torch import nn
 from torch.optim import Adam
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision.models import resnet18
+
+# Force matplotlib to run headlessly so it doesn't crash Colab
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 SRC_ROOT = Path(__file__).resolve().parent
 if str(SRC_ROOT) not in sys.path:
@@ -24,18 +30,19 @@ from classification_stage.classification_module import EmotionClassifier
 
 
 class FERFullPipeline(nn.Module):
-    """Wraps all your modules into one clean model for training."""
     def __init__(self):
         super().__init__()
-        # Backbone (Initialized with random weights, but will be overwritten by your checkpoint)
-        self.backbone = resnet18(weights=None)
+        self.backbone = resnet18(weights=None) # From scratch!
         
-        # Custom Modules
         self.lfa = LocalFeatureAugmentation(channels=128)
         self.msgc = MultiScaleGlobalConvolution(channels=128)
         self.safm = SpatialAttentionFeatureModule()
         self.tokenization = RegionTokenization()
         self.frit = FRITTransformer(input_dim=128, embed_dim=64)
+        
+        # UPGRADE 1: Heavy Dropout to prevent memorization
+        self.dropout = nn.Dropout(p=0.5) 
+        
         self.classifier = EmotionClassifier(embed_dim=64, num_classes=7)
 
     def forward(self, x):
@@ -51,52 +58,77 @@ class FERFullPipeline(nn.Module):
         x = self.safm(x)
         tokens = self.tokenization(x)
         frit_out = self.frit(tokens)
-        logits = self.classifier(frit_out)
         
+        # Apply Dropout right before the final decision
+        frit_out = self.dropout(frit_out) 
+        
+        logits = self.classifier(frit_out)
         return logits
+
+# UPGRADE 3: The Live Plotting Function
+def save_live_plot(history: dict, save_path: Path):
+    """Draws a detailed graph with points for every epoch and saves it."""
+    plt.figure(figsize=(14, 6))
+    
+    # Plot Accuracy
+    plt.subplot(1, 2, 1)
+    plt.plot(history['train_acc'], marker='o', linestyle='-', color='blue', label='Train Accuracy')
+    plt.plot(history['val_acc'], marker='o', linestyle='-', color='green', label='Validation Accuracy')
+    plt.title('Accuracy over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy (%)')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    # Plot Loss
+    plt.subplot(1, 2, 2)
+    plt.plot(history['train_loss'], marker='o', linestyle='-', color='red', label='Train Loss')
+    plt.title('Training Loss over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close() # Free up memory
 
 
 def train_model():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset-type", type=str, required=True, choices=["FER2013", "RAF-DB"])
+    parser.add_argument("--dataset-type", type=str, default="RAF-DB")
     parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=50) 
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--save-dir", type=Path, default=Path("/content/drive/MyDrive/FER_Checkpoints"))
-    
-    # NEW: The flag for Transfer Learning!
-    parser.add_argument("--checkpoint", type=Path, default=None, help="Path to pre-trained weights")
     args = parser.parse_args()
 
-    # Setup Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Starting training on: {device}")
+    print(f"🚀 Starting Research-Grade Training on: {device}")
     
     args.save_dir.mkdir(parents=True, exist_ok=True)
+    graph_path = args.save_dir / "live_learning_curve.png"
 
-    # Load Data
-    print(f"📦 Loading {args.dataset_type} from {args.data_dir}...")
-    train_loader, test_loader = create_dataloaders(
+    # In RAF-DB, the 'test' folder is strictly used as our Validation Set during training.
+    train_loader, val_loader = create_dataloaders(
         dataset_type=args.dataset_type,
         root_dir=args.data_dir,
         batch_size=args.batch_size
     )
 
-    # Initialize Model
     model = FERFullPipeline().to(device)
-    
-    # NEW: Load the pre-trained brain if you passed the --checkpoint flag
-    if args.checkpoint is not None and args.checkpoint.exists():
-        print(f"🧠 Loading pre-trained weights from {args.checkpoint}...")
-        model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=True))
-
     criterion = nn.CrossEntropyLoss()
-    optimizer = Adam(model.parameters(), lr=args.lr)
+    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3, verbose=True)
 
+    history = {'train_loss': [], 'train_acc': [], 'val_acc': []}
     best_acc = 0.0
+    
+    # UPGRADE 2: Early Stopping Trackers
+    early_stop_patience = 7
+    epochs_without_improvement = 0
 
-    # The Training Loop
     for epoch in range(args.epochs):
         model.train()
         running_loss = 0.0
@@ -120,32 +152,47 @@ def train_model():
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-            if batch_idx % 50 == 0:
-                print(f"Batch {batch_idx}/{len(train_loader)} | Loss: {loss.item():.4f}")
-
+        epoch_loss = running_loss / len(train_loader)
         train_acc = 100 * correct / total
         
-        # Evaluation Loop
+        # Validation Loop
         model.eval()
-        test_correct = 0
-        test_total = 0
+        val_correct = 0
+        val_total = 0
         with torch.no_grad():
-            for images, labels in test_loader:
+            for images, labels in val_loader:
                 images, labels = images.to(device), labels.to(device)
                 outputs = model(images)
                 _, predicted = torch.max(outputs.data, 1)
-                test_total += labels.size(0)
-                test_correct += (predicted == labels).sum().item()
+                val_total += labels.size(0)
+                val_correct += (predicted == labels).sum().item()
 
-        test_acc = 100 * test_correct / test_total
-        print(f"Train Acc: {train_acc:.2f}% | Test Acc: {test_acc:.2f}%")
+        val_acc = 100 * val_correct / val_total
+        print(f"Train Loss: {epoch_loss:.4f} | Train Acc: {train_acc:.2f}% | Val Acc: {val_acc:.2f}%")
+        
+        scheduler.step(val_acc)
+        
+        # Update history and redraw the graph instantly!
+        history['train_loss'].append(epoch_loss)
+        history['train_acc'].append(train_acc)
+        history['val_acc'].append(val_acc)
+        save_live_plot(history, graph_path)
+        print(f"📊 Graph updated at: {graph_path.name}")
 
-        # Save Checkpoint
-        if test_acc > best_acc:
-            best_acc = test_acc
-            save_path = args.save_dir / f"best_{args.dataset_type.lower()}_model.pt"
+        # Save Checkpoint & Early Stopping Logic
+        if val_acc > best_acc:
+            best_acc = val_acc
+            epochs_without_improvement = 0 # Reset the clock
+            save_path = args.save_dir / f"pure_{args.dataset_type.lower()}_from_scratch.pt"
             torch.save(model.state_dict(), save_path)
-            print(f"⭐ New best model saved to {save_path}!")
+            print(f"⭐ New best pure model saved! ({best_acc:.2f}%)")
+        else:
+            epochs_without_improvement += 1
+            print(f"⚠️ No improvement for {epochs_without_improvement} epoch(s).")
+            
+            if epochs_without_improvement >= early_stop_patience:
+                print(f"\n🛑 EARLY STOPPING TRIGGERED! The model stopped learning general rules. Halting to save your best weights.")
+                break # Kills the loop
 
 if __name__ == "__main__":
     train_model()
