@@ -70,8 +70,7 @@ class RAFDBDataset(Dataset):
         # Read CSV
         self.df = pd.read_csv(csv_path, header=None, names=["filename", "label"])
         
-        # FIX: If the CSV has a header row, the first label will literally be the word "label".
-        # We drop that row so it doesn't crash the math.
+        # Drop header if it exists
         if str(self.df.iloc[0]["label"]).strip().lower() == "label":
             self.df = self.df.iloc[1:].reset_index(drop=True)
             
@@ -87,7 +86,20 @@ class RAFDBDataset(Dataset):
         img_name = str(self.df.iloc[idx]["filename"])
         label = int(self.df.iloc[idx]["label"])
         
+        # 1. Try the exact name from the CSV
         img_path = self.img_dir / img_name
+        
+        # 2. RAF-DB NAMING FIX: Try the alternate naming formats if the first one fails
+        if not img_path.exists():
+            if "_aligned" in img_name:
+                img_path = self.img_dir / img_name.replace("_aligned", "")
+            else:
+                img_path = self.img_dir / img_name.replace(".jpg", "_aligned.jpg")
+                
+        # 3. Final safety check
+        if not img_path.exists():
+            raise FileNotFoundError(f"Missing image: {img_name} is not in {self.img_dir}")
+
         image = Image.open(img_path).convert("RGB")
         
         return self.transform(image), label
