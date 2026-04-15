@@ -61,48 +61,53 @@ class FER2013Dataset(Dataset):
 
 
 class RAFDBDataset(Dataset):
-    """Handles the RAF-DB CSV mapping structure."""
+    """Handles the RAF-DB CSV mapping structure and filters out missing images."""
     def __init__(self, root_dir: Path, image_size: int = 224, is_train: bool = True) -> None:
         self.img_dir = root_dir / "DATASET"
         csv_name = "train_labels.csv" if is_train else "test_labels.csv"
         csv_path = root_dir / csv_name
         
         # Read CSV
-        self.df = pd.read_csv(csv_path, header=None, names=["filename", "label"])
+        df = pd.read_csv(csv_path, header=None, names=["filename", "label"])
         
         # Drop header if it exists
-        if str(self.df.iloc[0]["label"]).strip().lower() == "label":
-            self.df = self.df.iloc[1:].reset_index(drop=True)
+        if str(df.iloc[0]["label"]).strip().lower() == "label":
+            df = df.iloc[1:].reset_index(drop=True)
             
-        # Convert the remaining text numbers to integers and subtract 1
-        self.df["label"] = self.df["label"].astype(int) - 1 
+        df["label"] = df["label"].astype(int) - 1 
         
+        print(f"🔍 Scanning {csv_name} to filter out missing images...")
+        self.image_paths = []
+        self.labels = []
+        
+        # The Ultimate Cleaner: Check every file. Drop it if it doesn't exist.
+        for idx, row in df.iterrows():
+            img_name = str(row["filename"])
+            label = int(row["label"])
+            
+            # Check all possible naming conventions
+            path_options = [
+                self.img_dir / img_name,
+                self.img_dir / img_name.replace("_aligned", ""),
+                self.img_dir / img_name.replace(".jpg", "_aligned.jpg")
+            ]
+            
+            for path in path_options:
+                if path.exists():
+                    self.image_paths.append(path)
+                    self.labels.append(label)
+                    break # Found it, stop checking options for this image
+                    
+        print(f"✅ Found {len(self.image_paths)} valid images out of {len(df)}.")
         self.transform = get_transforms(image_size, is_train)
 
     def __len__(self) -> int:
-        return len(self.df)
+        return len(self.image_paths)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
-        img_name = str(self.df.iloc[idx]["filename"])
-        label = int(self.df.iloc[idx]["label"])
-        
-        # 1. Try the exact name from the CSV
-        img_path = self.img_dir / img_name
-        
-        # 2. RAF-DB NAMING FIX: Try the alternate naming formats if the first one fails
-        if not img_path.exists():
-            if "_aligned" in img_name:
-                img_path = self.img_dir / img_name.replace("_aligned", "")
-            else:
-                img_path = self.img_dir / img_name.replace(".jpg", "_aligned.jpg")
-                
-        # 3. Final safety check
-        if not img_path.exists():
-            raise FileNotFoundError(f"Missing image: {img_name} is not in {self.img_dir}")
-
-        image = Image.open(img_path).convert("RGB")
-        
-        return self.transform(image), label
+        # Now it only tries to load files we already proved exist
+        image = Image.open(self.image_paths[idx]).convert("RGB")
+        return self.transform(image), self.labels[idx]
 
 
 def create_dataloaders(
