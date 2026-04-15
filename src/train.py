@@ -33,39 +33,22 @@ class FERFullPipeline(nn.Module):
     def __init__(self):
         super().__init__()
         
-        # THE ACCURACY SWITCH: 'DEFAULT' loads the best ImageNet weights
+        # Load the ImageNet weights
         self.backbone = resnet18(weights='DEFAULT') 
         
+        # THE FIX: Freeze the backbone so the Transformer doesn't destroy it!
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+            
         self.lfa = LocalFeatureAugmentation(channels=128)
         self.msgc = MultiScaleGlobalConvolution(channels=128)
         self.safm = SpatialAttentionFeatureModule()
         self.tokenization = RegionTokenization()
         self.frit = FRITTransformer(input_dim=128, embed_dim=64)
         
-        # Heavy Dropout to prevent memorization
         self.dropout = nn.Dropout(p=0.5) 
         
         self.classifier = EmotionClassifier(embed_dim=64, num_classes=7)
-
-    def forward(self, x):
-        x = self.backbone.conv1(x)
-        x = self.backbone.bn1(x)
-        x = self.backbone.relu(x)
-        x = self.backbone.maxpool(x)
-        x = self.backbone.layer1(x)
-        x = self.backbone.layer2(x)
-        
-        x = self.lfa(x)
-        x = self.msgc(x)
-        x = self.safm(x)
-        tokens = self.tokenization(x)
-        frit_out = self.frit(tokens)
-        
-        # Apply Dropout right before the final decision
-        frit_out = self.dropout(frit_out) 
-        
-        logits = self.classifier(frit_out)
-        return logits
 
 # The Live Plotting Function
 def save_live_plot(history: dict, save_path: Path):
