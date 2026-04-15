@@ -61,9 +61,9 @@ class FER2013Dataset(Dataset):
 
 
 class RAFDBDataset(Dataset):
-    """Handles the RAF-DB CSV mapping structure and filters out missing images."""
+    """Handles RAF-DB and automatically finds images no matter what subfolder they are in."""
     def __init__(self, root_dir: Path, image_size: int = 224, is_train: bool = True) -> None:
-        self.img_dir = root_dir / "DATASET"
+        root_dir = Path(root_dir)
         csv_name = "train_labels.csv" if is_train else "test_labels.csv"
         csv_path = root_dir / csv_name
         
@@ -76,39 +76,48 @@ class RAFDBDataset(Dataset):
             
         df["label"] = df["label"].astype(int) - 1 
         
-        print(f"🔍 Scanning {csv_name} to filter out missing images...")
+        print(f"🔍 Mapping all physical images inside {root_dir}...")
+        # 1. THE OMNI-SEARCH: Find every single .jpg file anywhere inside the RAF-DB folder
+        available_images = {}
+        for img_path in root_dir.rglob("*.jpg"):
+            available_images[img_path.name] = img_path
+            
+        print(f"🔍 Scanning {csv_name} against found images...")
         self.image_paths = []
         self.labels = []
         
-        # The Ultimate Cleaner: Check every file. Drop it if it doesn't exist.
+        # 2. Match the CSV names to the physical files we actually found
         for idx, row in df.iterrows():
-            img_name = str(row["filename"])
+            img_name = str(row["filename"]).strip()
             label = int(row["label"])
             
-            # Check all possible naming conventions
-            path_options = [
-                self.img_dir / img_name,
-                self.img_dir / img_name.replace("_aligned", ""),
-                self.img_dir / img_name.replace(".jpg", "_aligned.jpg")
+            # Check for exact match or the _aligned variant
+            possible_names = [
+                img_name,
+                img_name.replace("_aligned", ""),
+                img_name.replace(".jpg", "_aligned.jpg")
             ]
             
-            for path in path_options:
-                if path.exists():
-                    self.image_paths.append(path)
+            for name in possible_names:
+                if name in available_images:
+                    self.image_paths.append(available_images[name])
                     self.labels.append(label)
-                    break # Found it, stop checking options for this image
+                    break # Found it, move to the next image!
                     
         print(f"✅ Found {len(self.image_paths)} valid images out of {len(df)}.")
+        
+        # Final safety net
+        if len(self.image_paths) == 0:
+            raise RuntimeError(f"CRITICAL ERROR: Could not find ANY .jpg files inside {root_dir}. Your zip file might be empty or corrupted.")
+            
         self.transform = get_transforms(image_size, is_train)
 
     def __len__(self) -> int:
         return len(self.image_paths)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
-        # Now it only tries to load files we already proved exist
         image = Image.open(self.image_paths[idx]).convert("RGB")
         return self.transform(image), self.labels[idx]
-
 
 def create_dataloaders(
     dataset_type: str,
