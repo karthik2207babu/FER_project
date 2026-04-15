@@ -67,9 +67,16 @@ class RAFDBDataset(Dataset):
         csv_name = "train_labels.csv" if is_train else "test_labels.csv"
         csv_path = root_dir / csv_name
         
-        # Read CSV. (RAF-DB labels are 1-7. We subtract 1 to make them 0-6 to match FER2013)
+        # Read CSV
         self.df = pd.read_csv(csv_path, header=None, names=["filename", "label"])
-        self.df["label"] = self.df["label"] - 1 
+        
+        # FIX: If the CSV has a header row, the first label will literally be the word "label".
+        # We drop that row so it doesn't crash the math.
+        if str(self.df.iloc[0]["label"]).strip().lower() == "label":
+            self.df = self.df.iloc[1:].reset_index(drop=True)
+            
+        # Convert the remaining text numbers to integers and subtract 1
+        self.df["label"] = self.df["label"].astype(int) - 1 
         
         self.transform = get_transforms(image_size, is_train)
 
