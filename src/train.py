@@ -32,7 +32,9 @@ from classification_stage.classification_module import EmotionClassifier
 class FERFullPipeline(nn.Module):
     def __init__(self):
         super().__init__()
-        self.backbone = resnet18(weights=None) # From scratch!
+        
+        # THE ACCURACY SWITCH: 'DEFAULT' loads the best ImageNet weights
+        self.backbone = resnet18(weights='DEFAULT') 
         
         self.lfa = LocalFeatureAugmentation(channels=128)
         self.msgc = MultiScaleGlobalConvolution(channels=128)
@@ -40,7 +42,7 @@ class FERFullPipeline(nn.Module):
         self.tokenization = RegionTokenization()
         self.frit = FRITTransformer(input_dim=128, embed_dim=64)
         
-        # UPGRADE 1: Heavy Dropout to prevent memorization
+        # Heavy Dropout to prevent memorization
         self.dropout = nn.Dropout(p=0.5) 
         
         self.classifier = EmotionClassifier(embed_dim=64, num_classes=7)
@@ -65,7 +67,7 @@ class FERFullPipeline(nn.Module):
         logits = self.classifier(frit_out)
         return logits
 
-# UPGRADE 3: The Live Plotting Function
+# The Live Plotting Function
 def save_live_plot(history: dict, save_path: Path):
     """Draws a detailed graph with points for every epoch and saves it."""
     plt.figure(figsize=(14, 6))
@@ -105,7 +107,7 @@ def train_model():
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Starting Research-Grade Training on: {device}")
+    print(f"🚀 Starting High-Accuracy Training (ImageNet Backbone) on: {device}")
     
     args.save_dir.mkdir(parents=True, exist_ok=True)
     graph_path = args.save_dir / "live_learning_curve.png"
@@ -125,7 +127,7 @@ def train_model():
     history = {'train_loss': [], 'train_acc': [], 'val_acc': []}
     best_acc = 0.0
     
-    # UPGRADE 2: Early Stopping Trackers
+    # Early Stopping Trackers
     early_stop_patience = 7
     epochs_without_improvement = 0
 
@@ -185,7 +187,7 @@ def train_model():
             epochs_without_improvement = 0 # Reset the clock
             save_path = args.save_dir / f"pure_{args.dataset_type.lower()}_from_scratch.pt"
             torch.save(model.state_dict(), save_path)
-            print(f"⭐ New best pure model saved! ({best_acc:.2f}%)")
+            print(f"⭐ New best model saved! ({best_acc:.2f}%)")
         else:
             epochs_without_improvement += 1
             print(f"⚠️ No improvement for {epochs_without_improvement} epoch(s).")
