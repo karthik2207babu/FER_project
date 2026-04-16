@@ -29,8 +29,8 @@ def get_transforms(image_size: int, is_train: bool):
             transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
             transforms.RandomHorizontalFlip(),
             transforms.ColorJitter(brightness=0.2, contrast=0.2),
-            transforms.RandomErasing(p=0.25),
-            transforms.ToTensor(),
+            transforms.ToTensor(),                      # ✅ move this up
+            transforms.RandomErasing(p=0.25),           # ✅ AFTER ToTensor
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
         ])
     return transforms.Compose([
