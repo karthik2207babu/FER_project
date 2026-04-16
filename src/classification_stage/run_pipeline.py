@@ -55,7 +55,7 @@ def main() -> int:
         mtcnn=mtcnn,
         input_path=args.input_image,
         output_path=aligned_image_path,
-        copy_if_missed=False,
+        copy_if_missed=True,
     )
 
     if mtcnn_result.status == "error":

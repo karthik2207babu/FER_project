@@ -40,10 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=default_output_dir,
         help="Where checkpoints and metrics will be saved.",
     )
-    parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs.")
+    parser.add_argument("--epochs", type=int, default=30, help="Number of training epochs.")
     parser.add_argument("--batch-size", type=int, default=32, help="Mini-batch size.")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate.")
-    parser.add_argument("--weight-decay", type=float, default=1e-4, help="AdamW weight decay.")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate.")
+    parser.add_argument("--weight-decay", type=float, default=3e-4, help="AdamW weight decay.")
     parser.add_argument("--image-size", type=int, default=224, help="Input image size.")
     parser.add_argument(
         "--weights",
@@ -108,11 +108,8 @@ def create_model(num_classes: int, weights_mode: str, freeze_backbone: bool) -> 
     model = resnet18(weights=weights)
 
     if freeze_backbone:
-     for name, param in model.named_parameters():
-        if "layer1" in name or "layer2" in name:
+        for param in model.parameters():
             param.requires_grad = True
-        else:
-            param.requires_grad = False
 
     in_features = model.fc.in_features
     model.fc = nn.Linear(in_features, num_classes)
@@ -255,7 +252,7 @@ def main() -> int:
     )
     counts = Counter(train_dataset.targets)
     total = sum(counts.values())
-    weights = [total / counts[i] for i in range(len(counts))]
+    weights = [total / counts.get(i, 1) for i in range(len(train_dataset.classes))]
     weights = torch.tensor(weights, dtype=torch.float32).to(device)
 
     model = create_model(
@@ -265,14 +262,12 @@ def main() -> int:
     ).to(device)
 
     criterion = nn.CrossEntropyLoss(weight=weights)
-    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = torch.optim.AdamW(
-    [
-        {"params": model.layer2.parameters(), "lr": args.lr},
-        {"params": model.fc.parameters(), "lr": args.lr * 10},
-    ],
+    model.parameters(),
+    lr=args.lr,
     weight_decay=args.weight_decay,
     )
+
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     history: list[dict[str, float | int]] = []

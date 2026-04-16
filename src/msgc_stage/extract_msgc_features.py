@@ -83,7 +83,7 @@ def main() -> int:
         mtcnn=mtcnn,
         input_path=args.input_image,
         output_path=aligned_image_path,
-        copy_if_missed=False,
+        copy_if_missed=True,
     )
     if mtcnn_result.status == "error":
         print(mtcnn_result.message)
@@ -91,8 +91,8 @@ def main() -> int:
 
     inputs = load_aligned_tensor(aligned_image_path, args.image_size).to(device)
     backbone = load_backbone(args.checkpoint, device)
-    lfa = LocalFeatureAugmentation(channels=128).to(device).eval()
-    msgc = MultiScaleGlobalConvolution(channels=128).to(device).eval()
+    lfa = LocalFeatureAugmentation(channels=128).to(device)
+    msgc = MultiScaleGlobalConvolution(channels=128).to(device)
 
     resnet_feature_map = forward_to_layer2(backbone, inputs)
     with torch.no_grad():

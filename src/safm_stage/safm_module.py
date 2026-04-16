@@ -27,12 +27,9 @@ class SpatialAttentionFeatureModule(nn.Module):
         super().__init__()
 
         # 7×7 convolution to learn spatial attention
-        self.conv = nn.Conv2d(
-            in_channels=2,
-            out_channels=1,
-            kernel_size=7,
-            padding=3,
-            bias=False,
+        self.conv = nn.Sequential(
+            nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
+            nn.BatchNorm2d(1),
         )
 
         self.sigmoid = nn.Sigmoid()
@@ -60,4 +57,4 @@ class SpatialAttentionFeatureModule(nn.Module):
         # -------- Step 6: Apply attention --------
         out = x * attention  # broadcasting over channel
 
-        return out
+        return out+x

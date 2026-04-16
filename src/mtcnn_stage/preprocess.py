@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--margin",
         type=int,
-        default=20,
+        default=40,
         help="Extra pixels kept around the detected face.",
     )
 
@@ -122,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Do not save anything when MTCNN misses a face.",
     )
-    parser.set_defaults(copy_if_missed=False)
+    parser.set_defaults(copy_if_missed=True)
     return parser
 
 
@@ -142,7 +142,7 @@ def create_mtcnn(device: torch.device, image_size: int, margin: int) -> MTCNN:
         image_size=image_size,
         margin=margin,
         select_largest=True,
-        post_process=True,
+        post_process=False,
         device=device,
     )
 

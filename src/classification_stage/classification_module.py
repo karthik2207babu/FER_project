@@ -7,7 +7,10 @@ class EmotionClassifier(nn.Module):
     def __init__(self, embed_dim: int = 64, num_classes: int = 7) -> None:
         super().__init__()
         # linear map
-        self.fc = nn.Linear(embed_dim, num_classes)
+        self.fc = nn.Sequential(
+            nn.LayerNorm(embed_dim),
+            nn.Linear(embed_dim, num_classes)
+        )
 
     def forward(self, t_prime: torch.Tensor) -> torch.Tensor:
         # extract global (index 0)

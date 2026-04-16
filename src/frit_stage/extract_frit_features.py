@@ -75,11 +75,11 @@ def main() -> int:
     backbone = load_backbone(args.checkpoint, device)
 
     # modules
-    lfa = LocalFeatureAugmentation(channels=128).to(device).eval()
-    msgc = MultiScaleGlobalConvolution(channels=128).to(device).eval()
-    safm = SpatialAttentionFeatureModule().to(device).eval()
-    tokenization = RegionTokenization().to(device).eval()
-    frit = FRITTransformer().to(device).eval()
+    lfa = LocalFeatureAugmentation(channels=128).to(device)
+    msgc = MultiScaleGlobalConvolution(channels=128).to(device)
+    safm = SpatialAttentionFeatureModule().to(device)
+    tokenization = RegionTokenization().to(device)
+    frit = FRITTransformer().to(device)
 
     # forward
     resnet_feature_map = forward_to_layer2(backbone, inputs)

@@ -67,4 +67,4 @@ class MultiScaleGlobalConvolution(nn.Module):
             dim=1,
         )
         fused = self.fusion(multi_scale)
-        return fused + x
+        return self.activation(fused + x)

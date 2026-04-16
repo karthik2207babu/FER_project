@@ -37,11 +37,8 @@ class FERFullPipeline(nn.Module):
         self.backbone = resnet18(weights='DEFAULT') 
         
         # THE FIX: Freeze the backbone so the Transformer doesn't destroy it!
-        for name, param in self.backbone.named_parameters():
-            if "layer1" in name or "layer2" in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
+        for param in self.backbone.parameters():
+            param.requires_grad = True
             
         self.lfa = LocalFeatureAugmentation(channels=128)
         self.msgc = MultiScaleGlobalConvolution(channels=128)
@@ -69,9 +66,9 @@ class FERFullPipeline(nn.Module):
 
         tokens = self.tokenization(x)
         t_prime = self.frit(tokens)
-        t_prime = self.dropout(t_prime)
+        t_prime = self.dropout(t_prime[:, 0, :])  # only global token
 
-        logits = self.classifier(t_prime)
+        logits = self.classifier(t_prime.unsqueeze(1))
 
         return logits
 
@@ -110,7 +107,7 @@ def train_model():
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=50) 
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--lr", type=float, default=0.0003)
     parser.add_argument("--save-dir", type=Path, default=Path("/content/drive/MyDrive/FER_Checkpoints"))
     args = parser.parse_args()
 
@@ -130,20 +127,14 @@ def train_model():
     model = FERFullPipeline().to(device)
     counts = Counter(train_loader.dataset.labels)
     total = sum(counts.values())
-    weights = torch.tensor([total / counts[i] for i in range(len(counts))]).to(device)
+    weights = torch.tensor([total / counts.get(i, 1) for i in range(7)]).to(device)
 
     criterion = nn.CrossEntropyLoss(weight=weights)
     optimizer = Adam(
-    [
-        {"params": model.backbone.layer2.parameters(), "lr": args.lr},
-        {"params": model.lfa.parameters(), "lr": args.lr},
-        {"params": model.msgc.parameters(), "lr": args.lr},
-        {"params": model.safm.parameters(), "lr": args.lr},
-        {"params": model.frit.parameters(), "lr": args.lr},
-        {"params": model.classifier.parameters(), "lr": args.lr * 5},
-    ],
-    weight_decay=1e-4
-)
+        model.parameters(),
+        lr=args.lr,
+        weight_decay=1e-4
+    )
     scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
 
     history = {'train_loss': [], 'train_acc': [], 'val_acc': []}

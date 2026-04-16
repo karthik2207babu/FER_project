@@ -77,7 +77,7 @@ def main() -> int:
         mtcnn=mtcnn,
         input_path=args.input_image,
         output_path=aligned_image_path,
-        copy_if_missed=False,
+        copy_if_missed=True,
     )
 
     if mtcnn_result.status == "error":
@@ -91,9 +91,9 @@ def main() -> int:
     backbone = load_backbone(args.checkpoint, device)
 
     # -------- Modules --------
-    lfa = LocalFeatureAugmentation(channels=128).to(device).eval()
-    msgc = MultiScaleGlobalConvolution(channels=128).to(device).eval()
-    safm = SpatialAttentionFeatureModule().to(device).eval()
+    lfa = LocalFeatureAugmentation(channels=128).to(device)
+    msgc = MultiScaleGlobalConvolution(channels=128).to(device)
+    safm = SpatialAttentionFeatureModule().to(device)
 
     # -------- Forward pass --------
     resnet_feature_map = forward_to_layer2(backbone, inputs)

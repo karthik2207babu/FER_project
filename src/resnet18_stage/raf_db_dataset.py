@@ -39,6 +39,7 @@ def build_train_transforms(image_size: int) -> transforms.Compose:
         [
             transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
             transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomErasing(p=0.25, scale=(0.02, 0.2)),
             transforms.ColorJitter(
                 brightness=0.15,
                 contrast=0.15,
@@ -54,7 +55,8 @@ def build_train_transforms(image_size: int) -> transforms.Compose:
 def build_eval_transforms(image_size: int) -> transforms.Compose:
     return transforms.Compose(
         [
-            transforms.Resize((image_size, image_size)),
+            transforms.Resize(int(image_size * 1.1)),
+            transforms.CenterCrop(image_size),
             transforms.ToTensor(),
             transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
         ]

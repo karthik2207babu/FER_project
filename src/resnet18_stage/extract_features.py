@@ -94,6 +94,7 @@ def load_model(checkpoint: Path | None, device: torch.device) -> torch.nn.Module
 
 
 def forward_to_feature_map(model: torch.nn.Module, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    model.eval()
     with torch.no_grad():
         x = model.conv1(inputs)
         x = model.bn1(x)
@@ -101,7 +102,8 @@ def forward_to_feature_map(model: torch.nn.Module, inputs: torch.Tensor) -> tupl
         x = model.maxpool(x)
 
         x = model.layer1(x)
-        feature_map = model.layer2(x)
+        x = model.layer2(x)
+        feature_map = x
 
         pooled = model.avgpool(feature_map)
         feature_vector = torch.flatten(pooled, 1)

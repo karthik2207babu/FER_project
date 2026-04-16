@@ -80,7 +80,7 @@ class LocalFeatureAugmentation(nn.Module):
         parallel_out_2 = self._parallel_conv(x1)
         x2 = x1 + parallel_out_2  # residual
 
-        return x2
+        return torch.relu(x2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # split
@@ -104,4 +104,5 @@ class LocalFeatureAugmentation(nn.Module):
         )
 
         # reconstruct full feature map
-        return torch.cat([top, bottom], dim=2)
+        out = torch.cat([top, bottom], dim=2)
+        return torch.relu(out)

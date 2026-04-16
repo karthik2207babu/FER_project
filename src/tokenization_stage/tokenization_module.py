@@ -31,6 +31,7 @@ class RegionTokenization(nn.Module):
         
         # stack tokens
         token_set = torch.stack([global_token, x1, x2, x3, x4], dim=1)
+        token_set = token_set + 1e-6
         
         # ensure memory layout
         token_set = token_set.contiguous()
