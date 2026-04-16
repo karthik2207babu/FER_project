@@ -9,22 +9,20 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
-# ResNet-18 ImageNet normalization requirements
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
-# FER2013 standard folder mapping
 FER2013_EMOTION_TO_IDX = {
-    "surprise": 0, "fear": 1, "disgust": 2, "happy": 3, 
+    "surprise": 0, "fear": 1, "disgust": 2, "happy": 3,
     "sad": 4, "angry": 5, "neutral": 6
 }
+
 
 def get_transforms(image_size: int, is_train: bool):
     if is_train:
         return transforms.Compose([
-            transforms.Resize((image_size, image_size)),
+            transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(10),
             transforms.ColorJitter(brightness=0.2, contrast=0.2),
             transforms.ToTensor(),
             transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
@@ -37,12 +35,11 @@ def get_transforms(image_size: int, is_train: bool):
 
 
 class FER2013Dataset(Dataset):
-    """Handles the FER2013 train/test folder structure."""
     def __init__(self, root_dir: Path, image_size: int = 224, is_train: bool = True) -> None:
         self.image_paths = []
         self.labels = []
         self.transform = get_transforms(image_size, is_train)
-        
+
         for emotion_name, label_idx in FER2013_EMOTION_TO_IDX.items():
             emotion_dir = root_dir / emotion_name
             if not emotion_dir.exists():
@@ -55,90 +52,96 @@ class FER2013Dataset(Dataset):
     def __len__(self) -> int:
         return len(self.image_paths)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+    def __getitem__(self, idx: int):
         image = Image.open(self.image_paths[idx]).convert("RGB")
         return self.transform(image), self.labels[idx]
 
 
 class RAFDBDataset(Dataset):
-    """Handles RAF-DB and automatically finds images no matter what subfolder they are in."""
     def __init__(self, root_dir: Path, image_size: int = 224, is_train: bool = True) -> None:
         root_dir = Path(root_dir)
         csv_name = "train_labels.csv" if is_train else "test_labels.csv"
         csv_path = root_dir / csv_name
-        
-        # Read CSV
+
         df = pd.read_csv(csv_path, header=None, names=["filename", "label"])
-        
-        # Drop header if it exists
+
         if str(df.iloc[0]["label"]).strip().lower() == "label":
             df = df.iloc[1:].reset_index(drop=True)
-            
-        df["label"] = df["label"].astype(int) - 1 
-        
-        print(f"🔍 Mapping all physical images inside {root_dir}...")
-        # 1. THE OMNI-SEARCH: Find every single .jpg file anywhere inside the RAF-DB folder
+
+        df["label"] = df["label"].astype(int) - 1
+
+        print(f"🔍 Mapping ONLY aligned images inside {root_dir}...")
+
+        # ✅ ONLY ALIGNED IMAGES (CRITICAL FIX)
         available_images = {}
-        for img_path in root_dir.rglob("*.jpg"):
+        for img_path in root_dir.rglob("*_aligned.jpg"):
             available_images[img_path.name] = img_path
-            
-        print(f"🔍 Scanning {csv_name} against found images...")
+
+        print(f"🔍 Matching CSV with aligned images...")
+
         self.image_paths = []
         self.labels = []
-        
-        # 2. Match the CSV names to the physical files we actually found
-        for idx, row in df.iterrows():
+
+        for _, row in df.iterrows():
             img_name = str(row["filename"]).strip()
             label = int(row["label"])
-            
-            # Check for exact match or the _aligned variant
-            possible_names = [
-                img_name,
-                img_name.replace("_aligned", ""),
-                img_name.replace(".jpg", "_aligned.jpg")
-            ]
-            
-            for name in possible_names:
-                if name in available_images:
-                    self.image_paths.append(available_images[name])
-                    self.labels.append(label)
-                    break # Found it, move to the next image!
-                    
-        print(f"✅ Found {len(self.image_paths)} valid images out of {len(df)}.")
-        
-        # Final safety net
+
+            aligned_name = img_name.replace(".jpg", "_aligned.jpg")
+
+            if aligned_name in available_images:
+                self.image_paths.append(available_images[aligned_name])
+                self.labels.append(label)
+
+        print(f"✅ Found {len(self.image_paths)} aligned images out of {len(df)}.")
+
         if len(self.image_paths) == 0:
-            raise RuntimeError(f"CRITICAL ERROR: Could not find ANY .jpg files inside {root_dir}. Your zip file might be empty or corrupted.")
-            
+            raise RuntimeError("CRITICAL ERROR: No aligned images found.")
+
         self.transform = get_transforms(image_size, is_train)
 
     def __len__(self) -> int:
         return len(self.image_paths)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+    def __getitem__(self, idx: int):
         image = Image.open(self.image_paths[idx]).convert("RGB")
         return self.transform(image), self.labels[idx]
 
+
 def create_dataloaders(
     dataset_type: str,
-    root_dir: str | Path, 
-    batch_size: int = 32, 
+    root_dir: str | Path,
+    batch_size: int = 32,
     image_size: int = 224,
     num_workers: int = 2
-) -> tuple[DataLoader, DataLoader]:
-    
+):
+
     root_dir = Path(root_dir)
-    
+
     if dataset_type.upper() == "FER2013":
-        train_dataset = FER2013Dataset(root_dir / "train", image_size, is_train=True)
-        test_dataset = FER2013Dataset(root_dir / "test", image_size, is_train=False)
+        train_dataset = FER2013Dataset(root_dir / "train", image_size, True)
+        test_dataset = FER2013Dataset(root_dir / "test", image_size, False)
+
     elif dataset_type.upper() == "RAF-DB":
-        train_dataset = RAFDBDataset(root_dir, image_size, is_train=True)
-        test_dataset = RAFDBDataset(root_dir, image_size, is_train=False)
+        train_dataset = RAFDBDataset(root_dir, image_size, True)
+        test_dataset = RAFDBDataset(root_dir, image_size, False)
+
     else:
         raise ValueError("dataset_type must be either 'FER2013' or 'RAF-DB'")
-    
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
-    
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+
     return train_loader, test_loader
