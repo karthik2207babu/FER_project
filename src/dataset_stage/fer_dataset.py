@@ -13,8 +13,13 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 FER2013_EMOTION_TO_IDX = {
-    "surprise": 0, "fear": 1, "disgust": 2, "happy": 3,
-    "sad": 4, "angry": 5, "neutral": 6
+    "angry": 0,
+    "disgust": 1,
+    "fear": 2,
+    "happy": 3,
+    "neutral": 4,
+    "sad": 5,
+    "surprise": 6
 }
 
 
