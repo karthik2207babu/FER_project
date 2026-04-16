@@ -29,5 +29,5 @@ class FRITTransformer(nn.Module):
         
         # T' = AV
         out = torch.bmm(attention, v)  # (B, 5, 64)
-        out = out+t
+        out = out+v
         return out
