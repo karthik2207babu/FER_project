@@ -101,9 +101,7 @@ def forward_to_feature_map(model: torch.nn.Module, inputs: torch.Tensor) -> tupl
         x = model.maxpool(x)
 
         x = model.layer1(x)
-        x = model.layer2(x)
-        x = model.layer3(x)
-        feature_map = model.layer4(x)
+        feature_map = model.layer2(x)
 
         pooled = model.avgpool(feature_map)
         feature_vector = torch.flatten(pooled, 1)

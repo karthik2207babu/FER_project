@@ -122,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Do not save anything when MTCNN misses a face.",
     )
-    parser.set_defaults(copy_if_missed=True)
+    parser.set_defaults(copy_if_missed=False)
     return parser
 
 
@@ -142,7 +142,7 @@ def create_mtcnn(device: torch.device, image_size: int, margin: int) -> MTCNN:
         image_size=image_size,
         margin=margin,
         select_largest=True,
-        post_process=False,
+        post_process=True,
         device=device,
     )
 

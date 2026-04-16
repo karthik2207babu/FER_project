@@ -30,6 +30,6 @@ class RegionTokenization(nn.Module):
         x4 = self.gap(bottom_right).flatten(1)
         
         # stack
-        token_set = torch.stack([global_token, x1, x2, x3, x4], dim=1)
+        token_set = token_set.contiguous()
         
         return token_set

@@ -6,7 +6,7 @@ import random
 import sys
 import time
 from pathlib import Path
-
+from collections import Counter
 import numpy as np
 import torch
 from torch import nn
@@ -108,8 +108,11 @@ def create_model(num_classes: int, weights_mode: str, freeze_backbone: bool) -> 
     model = resnet18(weights=weights)
 
     if freeze_backbone:
-        for parameter in model.parameters():
-            parameter.requires_grad = False
+     for name, param in model.named_parameters():
+        if "layer1" in name or "layer2" in name:
+            param.requires_grad = True
+        else:
+            param.requires_grad = False
 
     in_features = model.fc.in_features
     model.fc = nn.Linear(in_features, num_classes)
@@ -250,6 +253,10 @@ def main() -> int:
         num_workers=args.num_workers,
         pin_memory=pin_memory,
     )
+    counts = Counter(train_dataset.targets)
+    total = sum(counts.values())
+    weights = [total / counts[i] for i in range(len(counts))]
+    weights = torch.tensor(weights, dtype=torch.float32).to(device)
 
     model = create_model(
         num_classes=train_dataset.num_classes,
@@ -257,12 +264,14 @@ def main() -> int:
         freeze_backbone=args.freeze_backbone,
     ).to(device)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(weight=weights)
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = torch.optim.AdamW(
-        trainable_parameters,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
+    [
+        {"params": model.layer2.parameters(), "lr": args.lr},
+        {"params": model.fc.parameters(), "lr": args.lr * 10},
+    ],
+    weight_decay=args.weight_decay,
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 

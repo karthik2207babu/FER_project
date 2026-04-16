@@ -117,7 +117,7 @@ def main() -> int:
         mtcnn=mtcnn,
         input_path=args.input_image,
         output_path=aligned_image_path,
-        copy_if_missed=True,
+        copy_if_missed=False,
     )
 
     if result.status == "error":

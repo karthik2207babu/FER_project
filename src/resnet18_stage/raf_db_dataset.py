@@ -37,7 +37,7 @@ def resolve_default_data_root(project_root: Path) -> Path:
 def build_train_transforms(image_size: int) -> transforms.Compose:
     return transforms.Compose(
         [
-            transforms.Resize((image_size, image_size)),
+            transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.ColorJitter(
                 brightness=0.15,
