@@ -34,10 +34,20 @@ class FERFullPipeline(nn.Module):
         super().__init__()
         
         # Load the ImageNet weights
-        self.backbone = resnet18(weights='DEFAULT') 
+        self.backbone = resnet18(weights=None)
+
+        checkpoint = torch.load("/content/drive/MyDrive/FER_Checkpoints/best.pt")
+        self.backbone.load_state_dict({
+            k.replace("backbone.", ""): v
+            for k, v in checkpoint.items()
+            if "backbone" in k or "conv" in k or "layer" in k
+        }, strict=False)
         
         # THE FIX: Freeze the backbone so the Transformer doesn't destroy it!
         for param in self.backbone.parameters():
+         param.requires_grad = False
+
+        for param in self.backbone.layer2.parameters():
             param.requires_grad = True
             
         self.lfa = LocalFeatureAugmentation(channels=128)
@@ -131,8 +141,14 @@ def train_model():
 
     criterion = nn.CrossEntropyLoss(weight=weights)
     optimizer = Adam(
-        model.parameters(),
-        lr=args.lr,
+        [
+            {"params": model.backbone.layer2.parameters(), "lr": args.lr * 0.1},
+            {"params": model.lfa.parameters(), "lr": args.lr},
+            {"params": model.msgc.parameters(), "lr": args.lr},
+            {"params": model.safm.parameters(), "lr": args.lr},
+            {"params": model.frit.parameters(), "lr": args.lr},
+            {"params": model.classifier.parameters(), "lr": args.lr * 5},
+        ],
         weight_decay=1e-4
     )
     scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
