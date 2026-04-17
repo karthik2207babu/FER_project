@@ -86,4 +86,4 @@ if __name__ == "__main__":
         print(f"🚀 Fine-tuning starting from: {args.resume_path}")
         model.load_state_dict(torch.load(args.resume_path, map_location=DEVICE, weights_only=True))
 
-    train_model(model, loaders, DEVICE, epochs=20, lr=1e-5, save_dir=args.save_dir, cfg=cfg)
+    train_model(model, loaders, DEVICE, epochs=40, lr=1e-5, save_dir=args.save_dir, cfg=cfg)
