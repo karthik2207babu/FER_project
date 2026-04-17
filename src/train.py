@@ -41,66 +41,50 @@ def save_plot(history, save_dir):
     plt.close()
 
 def train_model(model, train_loader, val_loader, test_loader, device, epochs, lr, save_dir):
-    """
-    Orchestrates the training, validation, and testing phases.
-    Includes Label Smoothing and Adam Optimizer.
-    """
     os.makedirs(save_dir, exist_ok=True)
-    
-    # Label smoothing (0.05) acts as a regularization to prevent overfitting
     criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     
     best_acc = 0.0
     best_model_wts = copy.deepcopy(model.state_dict())
-    
-    # Dictionary to store metrics for plotting
     history = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
 
     for epoch in range(epochs):
         start_time = time.time()
         
-        # --- 1. Training Phase ---
         model.train()
         running_loss = 0.0
         running_corrects = 0
 
         for images, labels in train_loader:
             images, labels = images.to(device), labels.to(device)
-            
             optimizer.zero_grad()
             outputs = model(images)
             loss = criterion(outputs, labels)
-            
             _, preds = torch.max(outputs, 1)
             loss.backward()
             optimizer.step()
-            
             running_loss += loss.item() * images.size(0)
             running_corrects += torch.sum(preds == labels.data)
 
         epoch_train_loss = running_loss / len(train_loader.dataset)
         epoch_train_acc = (running_corrects.double() / len(train_loader.dataset)).item()
 
-        # --- 2. Validation Phase (End of every epoch) ---
         model.eval()
         val_loss = 0.0
         val_corrects = 0
-        
         with torch.no_grad():
             for images, labels in val_loader:
                 images, labels = images.to(device), labels.to(device)
                 outputs = model(images)
                 loss = criterion(outputs, labels)
                 _, preds = torch.max(outputs, 1)
-                
                 val_loss += loss.item() * images.size(0)
                 val_corrects += torch.sum(preds == labels.data)
     
         epoch_val_loss = val_loss / len(val_loader.dataset)
         epoch_val_acc = (val_corrects.double() / len(val_loader.dataset)).item()
 
-        # Update History Logs
         history['train_loss'].append(epoch_train_loss)
         history['val_loss'].append(epoch_val_loss)
         history['train_acc'].append(epoch_train_acc)
@@ -109,22 +93,18 @@ def train_model(model, train_loader, val_loader, test_loader, device, epochs, lr
         print(f"Epoch [{epoch+1}/{epochs}] | Train Acc: {epoch_train_acc:.4f} | "
               f"Val Acc: {epoch_val_acc:.4f} | Time: {time.time() - start_time:.1f}s")
 
-        # Automatically update the Live Graph in your Google Drive folder
         save_plot(history, save_dir)
 
-        # Checkpoint: Save weights if validation accuracy improved
         if epoch_val_acc > best_acc:
             best_acc = epoch_val_acc
             best_model_wts = copy.deepcopy(model.state_dict())
             torch.save(model.state_dict(), os.path.join(save_dir, "best_emotion_model.pt"))
-            print(f"⭐ New Best Model Saved! Accuracy: {best_acc:.4f}")
+            print(f"⭐ New Best Model Saved!")
 
-    # --- 3. Final Test Phase (The Unseen Set) ---
-    print("\n🔍 Running Final Evaluation on the Test Set...")
+    print("\n🔍 Final Evaluation on the Test Set...")
     model.load_state_dict(best_model_wts)
     model.eval()
     test_corrects = 0
-    
     with torch.no_grad():
         for images, labels in test_loader:
             images, labels = images.to(device), labels.to(device)
@@ -132,50 +112,30 @@ def train_model(model, train_loader, val_loader, test_loader, device, epochs, lr
             _, preds = torch.max(outputs, 1)
             test_corrects += torch.sum(preds == labels.data)
     
-    final_test_acc = (test_corrects.double() / len(test_loader.dataset)).item()
-    print(f"✅ Final Test Accuracy: {final_test_acc:.4f}")
-
-    # --- 4. ONNX Export (For deployment) ---
-    try:
-        dummy_input = torch.randn(1, 3, 224, 224).to(device)
-        onnx_path = os.path.join(save_dir, "best_emotion_model.onnx")
-        torch.onnx.export(model, dummy_input, onnx_path, opset_version=11)
-        print(f"📦 Exported ONNX model: {onnx_path}")
-    except Exception as e:
-        print(f"⚠️ ONNX export skipped: {e}")
-
+    print(f"✅ Final Test Accuracy: {(test_corrects.double() / len(test_loader.dataset)):.4f}")
     return model, history
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train-dir", type=str, required=True)
-    parser.add_argument("--val-dir", type=str, required=True)
-    parser.add_argument("--test-dir", type=str, required=True)
+    # Fixed: Only one data-dir required now
+    parser.add_argument("--data-dir", type=str, required=True, help="Path to folder containing train/val/test")
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--save-dir", type=str, default="/content/drive/MyDrive/FER_Checkpoints")
     args = parser.parse_args()
 
+    # Logic to automatically find the subfolders
+    base_path = Path(args.data_dir)
+    train_p = base_path / "train"
+    val_p = base_path / "val"
+    test_p = base_path / "test"
+
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Initializing High-Accuracy Pipeline on: {DEVICE}")
-
-    # 1. Load your balanced, augmented data
+    
     train_loader, val_loader, test_loader, _, _, _ = get_dataloaders(
-        args.train_dir, args.val_dir, args.test_dir, args.batch_size
+        train_p, val_p, test_p, args.batch_size
     )
 
-    # 2. Initialize the Assembly
     model = FERFullPipeline(num_classes=7).to(DEVICE)
-
-    # 3. Start Training
-    train_model(
-        model, 
-        train_loader, 
-        val_loader, 
-        test_loader, 
-        DEVICE, 
-        args.epochs, 
-        args.lr, 
-        args.save_dir
-    )
+    train_model(model, train_loader, val_loader, test_loader, DEVICE, args.epochs, args.lr, args.save_dir)
