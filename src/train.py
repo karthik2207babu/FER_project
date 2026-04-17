@@ -28,6 +28,13 @@ from tokenization_stage.tokenization_module import RegionTokenization
 from frit_stage.frit_module import FRITTransformer
 from classification_stage.classification_module import EmotionClassifier
 
+import pathlib
+import torch.serialization
+
+torch.serialization.add_safe_globals({
+    pathlib.WindowsPath: pathlib.PosixPath
+})
+
 
 class FERFullPipeline(nn.Module):
     def __init__(self):
