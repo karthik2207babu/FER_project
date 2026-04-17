@@ -34,15 +34,7 @@ class FERFullPipeline(nn.Module):
         super().__init__()
         
         # Load the ImageNet weights
-        self.backbone = resnet18(weights=None)
-
-        checkpoint = torch.load("/content/drive/MyDrive/FER_Checkpoints/best.pt")
-        self.backbone.load_state_dict({
-            k.replace("backbone.", ""): v
-            for k, v in checkpoint.items()
-            if "backbone" in k or "conv" in k or "layer" in k
-        }, strict=False)
-        
+        self.backbone = resnet18(weights='DEFAULT')
         # THE FIX: Freeze the backbone so the Transformer doesn't destroy it!
         for param in self.backbone.parameters():
          param.requires_grad = False
@@ -117,7 +109,7 @@ def train_model():
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=50) 
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=0.0003)
+    parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--save-dir", type=Path, default=Path("/content/drive/MyDrive/FER_Checkpoints"))
     args = parser.parse_args()
 
@@ -135,9 +127,25 @@ def train_model():
     )
 
     model = FERFullPipeline().to(device)
+
+    checkpoint_path = "/content/drive/MyDrive/FER_Checkpoints/best.pt"
+
+    if Path(checkpoint_path).exists():
+        print("Loading pretrained full model...")
+
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location=device,
+            weights_only=False
+        )
+
+    model.load_state_dict(checkpoint["model_state_dict"])
     counts = Counter(train_loader.dataset.labels)
     total = sum(counts.values())
-    weights = torch.tensor([total / counts.get(i, 1) for i in range(7)]).to(device)
+    weights = torch.tensor(
+        [total / counts[i] for i in sorted(counts.keys())],
+        dtype=torch.float32
+    ).to(device)
 
     criterion = nn.CrossEntropyLoss(weight=weights)
     optimizer = Adam(
@@ -176,6 +184,7 @@ def train_model():
             outputs = model(images)
             loss = criterion(outputs, labels)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
             running_loss += loss.item()
