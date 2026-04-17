@@ -1,27 +1,27 @@
 import torch
 
 class BaseConfig:
-    """Default settings for any dataset."""
     num_classes = 7
     labels = ['Angry', 'Disgust', 'Fear', 'Happy', 'Neutral', 'Sad', 'Surprise']
-    weights = None  # Default is equal weights
-
-class BalancedConfig(BaseConfig):
-    """Config for your 82.95% accuracy balanced dataset."""
-    name = "balanced_general"
-    # No weights needed because the dataset is already balanced
-    weights = None 
+    weights = None
 
 class RAFDBConfig(BaseConfig):
-    """Config for the imbalanced RAF-DB dataset."""
-    name = "raf_db"
-    # Calculated weights to help the model learn rare emotions (Disgust/Fear)
+    name = "rafdb"
+    # MAPS FOLDER NUMBERS TO OUR MODEL'S INDICES:
+    # 1:Surprise, 2:Fear, 3:Disgust, 4:Happy, 5:Sad, 6:Angry, 7:Neutral
+    folder_to_idx = {
+        '6': 0, # Angry
+        '3': 1, # Disgust
+        '2': 2, # Fear
+        '4': 3, # Happy
+        '7': 4, # Neutral
+        '5': 5, # Sad
+        '1': 6  # Surprise
+    }
+    # Weighting: Give more importance to rare classes (Disgust, Fear)
     weights = torch.tensor([1.5, 4.0, 5.0, 0.4, 1.0, 1.2, 1.8])
 
-# Factory to get the right config
 def get_dataset_config(name):
-    configs = {
-        "balanced": BalancedConfig,
-        "rafdb": RAFDBConfig
-    }
-    return configs.get(name.lower(), BaseConfig)
+    if name.lower() == "rafdb":
+        return RAFDBConfig
+    return BaseConfig

@@ -1,51 +1,48 @@
+import os
 import torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
-from pathlib import Path
 
-def get_dataloaders(train_dir: Path, val_dir: Path, test_dir: Path, batch_size: int = 32):
-    """
-    Creates PyTorch DataLoaders using heavy augmentations to prevent overfitting.
-    """
-    print("Initializing DataLoaders with heavy augmentations...")
+class MappedImageFolder(datasets.ImageFolder):
+    def __init__(self, root, transform=None, mapping=None):
+        super().__init__(root, transform=transform)
+        self.mapping = mapping
 
-    # Training Transformations (Heavy Augmentation)
-    train_tfms = transforms.Compose([
-        transforms.Grayscale(num_output_channels=1),
-        transforms.Resize((224, 224)),
-        transforms.Lambda(lambda img: img.convert("RGB")),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(15),
-        transforms.RandomPerspective(distortion_scale=0.3, p=0.5),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-        transforms.RandomAffine(degrees=10, translate=(0.1, 0.1)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
-    ])
+    def __getitem__(self, index):
+        path, _ = self.samples[index]
+        folder_name = os.path.basename(os.path.dirname(path))
+        target = self.mapping[folder_name] if self.mapping else _
+        sample = self.loader(path)
+        if self.transform is not None:
+            sample = self.transform(sample)
+        return sample, target
 
-    # Validation/Testing Transformations (Strictly formatting, no random changes)
-    val_tfms = transforms.Compose([
-        transforms.Grayscale(num_output_channels=1),
-        transforms.Resize((224, 224)),
-        transforms.Lambda(lambda img: img.convert("RGB")),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
-    ])
-
-    # Load datasets using ImageFolder (Expects subfolders for each class)
-    train_dataset = datasets.ImageFolder(train_dir, transform=train_tfms)
-    val_dataset = datasets.ImageFolder(val_dir, transform=val_tfms)
-    test_dataset = datasets.ImageFolder(test_dir, transform=val_tfms)
-
-    # Create iterable DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
-
-    print(f"✅ DataLoaded successfully!")
-    print(f"Train size: {len(train_dataset)} | Val size: {len(val_dataset)} | Test size: {len(test_dataset)}")
-    print(f"Classes detected: {train_dataset.classes}")
+def get_dataloaders(data_dir, config, batch_size=32):
+    norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     
-    return train_loader, val_loader, test_loader, train_dataset, val_dataset, test_dataset
+    # We keep Grayscale(1) so the features match your best_emotion_model.pt
+    tf = transforms.Compose([
+        transforms.Grayscale(1), transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(), transforms.Lambda(lambda x: x.convert("RGB")),
+        transforms.ToTensor(), norm
+    ])
+
+    if config.name == "rafdb":
+        train_path = os.path.join(data_dir, "DATASET/train")
+        test_path = os.path.join(data_dir, "DATASET/test")
+        
+        train_ds = MappedImageFolder(train_path, tf, config.folder_to_idx)
+        full_test_ds = MappedImageFolder(test_path, tf, config.folder_to_idx)
+        
+        # Creating a validation split from the test set for monitoring
+        v_size = len(full_test_ds) // 2
+        t_size = len(full_test_ds) - v_size
+        val_ds, test_ds = torch.utils.data.random_split(full_test_ds, [v_size, t_size])
+    else:
+        train_ds = datasets.ImageFolder(os.path.join(data_dir, "train"), tf)
+        val_ds = datasets.ImageFolder(os.path.join(data_dir, "val"), tf)
+        test_ds = datasets.ImageFolder(os.path.join(data_dir, "test"), tf)
+
+    return (DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2),
+            DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2),
+            DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=2))
