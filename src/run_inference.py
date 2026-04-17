@@ -1,23 +1,25 @@
+import os
 import torch
 from PIL import Image
 from torchvision import transforms
 from pathlib import Path
-from model import FERFullPipeline
+from src.model import FERFullPipeline # Corrected import for your folder structure
 
-def predict_emotion(image_path, model_path):
-    # 1. Set up device
+def run_team_inference():
+    # 1. Config
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model_path = "/content/drive/MyDrive/FER_Checkpoints/best_emotion_model.pt"
+    image_dir = "test_images"
     
-    # 2. Define standard labels (Update based on your dataset order)
-    emotion_labels = ['Angry', 'Disgust', 'Fear', 'Happy', 'Sad', 'Surprise', 'Neutral']
+    # CRITICAL: This MUST be alphabetical order to match training
+    emotion_labels = ['Angry', 'Disgust', 'Fear', 'Happy', 'Neutral', 'Sad', 'Surprise']
     
-    # 3. Initialize model and load weights
+    # 2. Initialize and Load Weights
     model = FERFullPipeline(num_classes=7).to(device)
-    # weights_only=True is a security best practice for loading .pt files
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.eval() # Switch to evaluation mode
+    model.eval()
     
-    # 4. Image Preprocessing (Matches your Kaggle Dataloader logic)
+    # 3. Preprocessing
     transform = transforms.Compose([
         transforms.Grayscale(num_output_channels=1),
         transforms.Resize((224, 224)),
@@ -26,28 +28,24 @@ def predict_emotion(image_path, model_path):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     
-    # 5. Load and process image
-    img = Image.open(image_path).convert('RGB')
-    img_tensor = transform(img).unsqueeze(0).to(device) # Add batch dimension
+    # 4. Iterate and Predict
+    print(f"{'IMAGE':<20} | {'PREDICTION':<12} | {'CONFIDENCE'}")
+    print("-" * 50)
     
-    # 6. Run Inference
-    with torch.no_grad():
-        logits = model(img_tensor)
-        probabilities = torch.softmax(logits, dim=1)
-        confidence, predicted_idx = torch.max(probabilities, 1)
-        
-    # 7. Output Result
-    emotion = emotion_labels[predicted_idx.item()]
-    print(f"--- Result ---")
-    print(f"Prediction: {emotion}")
-    print(f"Confidence: {confidence.item() * 100:.2f}%")
+    for img_file in sorted(os.listdir(image_dir)):
+        if img_file.lower().endswith(('.jpg', '.jpeg', '.png')):
+            img_path = os.path.join(image_dir, img_file)
+            
+            # Process
+            img = Image.open(img_path).convert('RGB')
+            img_tensor = transform(img).unsqueeze(0).to(device)
+            
+            with torch.no_grad():
+                logits = model(img_tensor)
+                probs = torch.softmax(logits, dim=1)
+                conf, pred_idx = torch.max(probs, 1)
+            
+            print(f"{img_file:<20} | {emotion_labels[pred_idx.item()]:<12} | {conf.item()*100:.2f}%")
 
-if __name__ == "__main__":
-    # Test on a single image
-    TEST_IMAGE = "path/to/your/test_image.jpg"
-    MODEL_WEIGHTS = "best.pt"
-    
-    if Path(TEST_IMAGE).exists() and Path(MODEL_WEIGHTS).exists():
-        predict_emotion(TEST_IMAGE, MODEL_WEIGHTS)
-    else:
-        print("Error: Ensure image and model weights paths are correct.")
+# Execute
+run_team_inference()
