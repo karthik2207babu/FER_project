@@ -2,7 +2,7 @@ import torch
 from PIL import Image
 from torchvision import transforms
 from pathlib import Path
-from src.model import FERFullPipeline
+from model import FERFullPipeline
 
 def predict_emotion(image_path, model_path):
     # 1. Set up device
