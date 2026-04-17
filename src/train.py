@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import argparse
+import os
 import sys
+import argparse
 from pathlib import Path
 from collections import Counter
 import torch
@@ -9,6 +10,23 @@ from torch import nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision.models import resnet18
+
+import pathlib
+import torch.serialization
+
+# --- THE PATHLIB FIX ---
+# 1. Trick the unpickler into finding the removed _local module
+sys.modules["pathlib._local"] = pathlib
+
+# 2. Automatically handle cross-OS path translation
+if os.name == 'nt':
+    pathlib.PosixPath = pathlib.WindowsPath
+else:
+    pathlib.WindowsPath = pathlib.PosixPath
+
+torch.serialization.add_safe_globals({
+    pathlib.WindowsPath: pathlib.PosixPath
+})
 
 # Force matplotlib to run headlessly so it doesn't crash Colab
 import matplotlib
@@ -28,31 +46,25 @@ from tokenization_stage.tokenization_module import RegionTokenization
 from frit_stage.frit_module import FRITTransformer
 from classification_stage.classification_module import EmotionClassifier
 
-import os
-import sys
-import pathlib
-import torch.serialization
-
-# 1. Trick the unpickler into finding the removed _local module
-sys.modules["pathlib._local"] = pathlib
-
-# 2. Automatically handle cross-OS path translation (Windows <-> Posix)
-if os.name == 'nt':
-    pathlib.PosixPath = pathlib.WindowsPath
-else:
-    pathlib.WindowsPath = pathlib.PosixPath
-
-
 class FERFullPipeline(nn.Module):
     def __init__(self):
         super().__init__()
         
         # Load the ImageNet weights
         self.backbone = resnet18(weights='DEFAULT')
-        # THE FIX: Freeze the backbone so the Transformer doesn't destroy it!
+        
+        # --- MEMORY OPTIMIZATION: Drop unused layers ---
+        # Since we only use up to layer2, keeping the rest wastes GPU VRAM
+        del self.backbone.layer3
+        del self.backbone.layer4
+        del self.backbone.avgpool
+        del self.backbone.fc
+        
+        # Freeze the backbone so the Transformer doesn't destroy it!
         for param in self.backbone.parameters():
-         param.requires_grad = False
+            param.requires_grad = False
 
+        # Unfreeze layer2 to allow for fine-tuning
         for param in self.backbone.layer2.parameters():
             param.requires_grad = True
             
@@ -65,8 +77,9 @@ class FERFullPipeline(nn.Module):
         self.dropout = nn.Dropout(p=0.5) 
         
         self.classifier = EmotionClassifier(embed_dim=64, num_classes=7)
+
     def forward(self, x):
-    # ResNet backbone upto layer2
+        # ResNet backbone up to layer2
         x = self.backbone.conv1(x)
         x = self.backbone.bn1(x)
         x = self.backbone.relu(x)
@@ -75,7 +88,7 @@ class FERFullPipeline(nn.Module):
         x = self.backbone.layer1(x)
         x = self.backbone.layer2(x)
 
-        # pipeline
+        # Custom pipeline
         x = self.lfa(x)
         x = self.msgc(x)
         x = self.safm(x)
@@ -116,7 +129,6 @@ def save_live_plot(history: dict, save_path: Path):
     plt.savefig(save_path)
     plt.close() # Free up memory
 
-
 def train_model():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset-type", type=str, default="RAF-DB")
@@ -145,7 +157,7 @@ def train_model():
     checkpoint_path = "/content/drive/MyDrive/FER_Checkpoints/best.pt"
 
     if Path(checkpoint_path).exists():
-        print("Loading pretrained full model...")
+        print("Loading pretrained ResNet backbone weights...")
 
         checkpoint = torch.load(
             checkpoint_path,
@@ -153,7 +165,19 @@ def train_model():
             weights_only=False
         )
 
-    model.load_state_dict(checkpoint["model_state_dict"])
+        # 1. Extract the raw ResNet weights
+        pretrained_dict = checkpoint.get("model_state_dict", checkpoint)
+
+        # 2. Filter out layers we explicitly deleted or don't want (like fc, layer3, layer4)
+        filtered_dict = {
+            k: v for k, v in pretrained_dict.items() 
+            if not k.startswith('fc.') and not k.startswith('layer3.') and not k.startswith('layer4.')
+        }
+
+        # 3. Load the filtered weights DIRECTLY into the backbone component
+        model.backbone.load_state_dict(filtered_dict, strict=False)
+        print("✅ Successfully injected checkpoint weights into the ResNet backbone!")
+
     counts = Counter(train_loader.dataset.labels)
     total = sum(counts.values())
     weights = torch.tensor(
@@ -186,7 +210,7 @@ def train_model():
         model.train()
         running_loss = 0.0
         correct = 0
-        total = 0
+        total_samples = 0
 
         print(f"\nEpoch {epoch+1}/{args.epochs}")
         print("-" * 20)
@@ -203,11 +227,11 @@ def train_model():
 
             running_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
+            total_samples += labels.size(0)
             correct += (predicted == labels).sum().item()
 
         epoch_loss = running_loss / len(train_loader)
-        train_acc = 100 * correct / total
+        train_acc = 100 * correct / total_samples
         
         # Validation Loop
         model.eval()
@@ -226,7 +250,7 @@ def train_model():
         
         scheduler.step(val_acc)
         
-        # Update history and redraw the graph instantly!
+        # Update history and redraw the graph instantly
         history['train_loss'].append(epoch_loss)
         history['train_acc'].append(train_acc)
         history['val_acc'].append(val_acc)
