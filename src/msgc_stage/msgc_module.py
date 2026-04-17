@@ -1,70 +1,60 @@
-from __future__ import annotations
-
 import torch
 from torch import nn
 
-
-class MSGCBranch(nn.Module):
-    def __init__(self, channels: int, kernel_size: int) -> None:
-        super().__init__()
-        padding = kernel_size // 2
-        self.block = nn.Sequential(
-            nn.Conv2d(
-                channels,
-                channels,
-                kernel_size=kernel_size,
-                padding=padding,
-                bias=False,
-            ),
-            nn.BatchNorm2d(channels),
-            nn.ReLU(inplace=True),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.block(x)
-
-
 class MultiScaleGlobalConvolution(nn.Module):
-    """
-    Multi-Scale Global Convolution (MSGC)
-
-    Input:
-        x in R^{B x 128 x 28 x 28}
-
-    Pipeline:
-    1. Split channels into 4 equal groups.
-    2. Process the groups with 1x1, 3x3, 5x5, and 7x7 convolutions.
-    3. Concatenate all groups back together.
-    4. Fuse with a 1x1 convolution and add a residual connection.
-    """
-
-    def __init__(self, channels: int = 128) -> None:
+    def __init__(self, channels: int = 128):
         super().__init__()
-        if channels % 4 != 0:
-            raise ValueError("MSGC requires the number of channels to be divisible by 4.")
-
-        group_channels = channels // 4
-        self.branch_1x1 = MSGCBranch(group_channels, kernel_size=1)
-        self.branch_3x3 = MSGCBranch(group_channels, kernel_size=3)
-        self.branch_5x5 = MSGCBranch(group_channels, kernel_size=5)
-        self.branch_7x7 = MSGCBranch(group_channels, kernel_size=7)
-        self.fusion = nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=1, bias=False),
-            nn.BatchNorm2d(channels),
+        
+        # We split the 128 channels into 4 groups of 32
+        self.split_channels = channels // 4
+        
+        # Branch 1: 1x1 Convolution (Hyper-local details)
+        self.branch_1x1 = nn.Sequential(
+            nn.Conv2d(self.split_channels, self.split_channels, kernel_size=1, padding=0, bias=False),
+            nn.BatchNorm2d(self.split_channels),
+            nn.ReLU(inplace=True)
         )
-        self.activation = nn.ReLU(inplace=True)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        group_1, group_2, group_3, group_4 = torch.chunk(x, chunks=4, dim=1)
-
-        multi_scale = torch.cat(
-            [
-                self.branch_1x1(group_1),
-                self.branch_3x3(group_2),
-                self.branch_5x5(group_3),
-                self.branch_7x7(group_4),
-            ],
-            dim=1,
+        
+        # Branch 2: 3x3 Convolution (Standard local details)
+        self.branch_3x3 = nn.Sequential(
+            nn.Conv2d(self.split_channels, self.split_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(self.split_channels),
+            nn.ReLU(inplace=True)
         )
-        fused = self.fusion(multi_scale)
-        return self.activation(fused + x)
+        
+        # Branch 3: 5x5 Convolution (Regional context)
+        self.branch_5x5 = nn.Sequential(
+            nn.Conv2d(self.split_channels, self.split_channels, kernel_size=5, padding=2, bias=False),
+            nn.BatchNorm2d(self.split_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Branch 4: 7x7 Convolution (Global face context)
+        self.branch_7x7 = nn.Sequential(
+            nn.Conv2d(self.split_channels, self.split_channels, kernel_size=7, padding=3, bias=False),
+            nn.BatchNorm2d(self.split_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        """
+        Input: F_LFA in (Batch, 128, 28, 28)
+        Output: F_MS in (Batch, 128, 28, 28)
+        """
+        # 1. Channel Split: Divide 128 channels into four 32-channel tensors
+        # dim=1 is the channel dimension (Batch, Channels, Height, Width)
+        c1, c2, c3, c4 = torch.split(x, self.split_channels, dim=1)
+        
+        # 2. Parallel Multi-Scale Convolutions
+        y1 = self.branch_1x1(c1)
+        y2 = self.branch_3x3(c2)
+        y3 = self.branch_5x5(c3)
+        y4 = self.branch_7x7(c4)
+        
+        # 3. Concatenation: Rebuild the 128 channels
+        y = torch.cat([y1, y2, y3, y4], dim=1)
+        
+        # 4. Residual Fusion: Add the original input to the new multi-scale features
+        f_ms = x + y
+        
+        return f_ms

@@ -1,276 +1,181 @@
-from __future__ import annotations
-
 import os
-import sys
-import argparse
-from pathlib import Path
-from collections import Counter
+import time
+import copy
 import torch
-from torch import nn
-from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torchvision.models import resnet18
-
-import pathlib
-import torch.serialization
-
-# --- THE PATHLIB FIX ---
-# 1. Trick the unpickler into finding the removed _local module
-sys.modules["pathlib._local"] = pathlib
-
-# 2. Automatically handle cross-OS path translation
-if os.name == 'nt':
-    pathlib.PosixPath = pathlib.WindowsPath
-else:
-    pathlib.WindowsPath = pathlib.PosixPath
-
-torch.serialization.add_safe_globals({
-    pathlib.WindowsPath: pathlib.PosixPath
-})
-
-# Force matplotlib to run headlessly so it doesn't crash Colab
-import matplotlib
-matplotlib.use('Agg')
+import torch.nn as nn
+import torch.optim as optim
+import argparse
 import matplotlib.pyplot as plt
+from pathlib import Path
 
-SRC_ROOT = Path(__file__).resolve().parent
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+# Assuming your assembled model is in src/model.py
+from model import FERFullPipeline
+from dataset_stage.fer_dataset import get_dataloaders
 
-# Import your custom modules
-from dataset_stage.fer_dataset import create_dataloaders
-from lfa_stage.lfa_module import LocalFeatureAugmentation
-from msgc_stage.msgc_module import MultiScaleGlobalConvolution
-from safm_stage.safm_module import SpatialAttentionFeatureModule
-from tokenization_stage.tokenization_module import RegionTokenization
-from frit_stage.frit_module import FRITTransformer
-from classification_stage.classification_module import EmotionClassifier
-
-class FERFullPipeline(nn.Module):
-    def __init__(self):
-        super().__init__()
-        
-        # Load the ImageNet weights
-        self.backbone = resnet18(weights='DEFAULT')
-        
-        # --- MEMORY OPTIMIZATION: Drop unused layers ---
-        # Since we only use up to layer2, keeping the rest wastes GPU VRAM
-        del self.backbone.layer3
-        del self.backbone.layer4
-        del self.backbone.avgpool
-        del self.backbone.fc
-        
-        # Freeze the backbone so the Transformer doesn't destroy it!
-        for param in self.backbone.parameters():
-            param.requires_grad = False
-
-        # Unfreeze layer2 to allow for fine-tuning
-        for param in self.backbone.layer2.parameters():
-            param.requires_grad = True
-            
-        self.lfa = LocalFeatureAugmentation(channels=128)
-        self.msgc = MultiScaleGlobalConvolution(channels=128)
-        self.safm = SpatialAttentionFeatureModule()
-        self.tokenization = RegionTokenization()
-        self.frit = FRITTransformer(input_dim=128, embed_dim=64)
-        
-        self.dropout = nn.Dropout(p=0.5) 
-        
-        self.classifier = EmotionClassifier(embed_dim=64, num_classes=7)
-
-    def forward(self, x):
-        # ResNet backbone up to layer2
-        x = self.backbone.conv1(x)
-        x = self.backbone.bn1(x)
-        x = self.backbone.relu(x)
-        x = self.backbone.maxpool(x)
-
-        x = self.backbone.layer1(x)
-        x = self.backbone.layer2(x)
-
-        # Custom pipeline
-        x = self.lfa(x)
-        x = self.msgc(x)
-        x = self.safm(x)
-
-        tokens = self.tokenization(x)
-        t_prime = self.frit(tokens)
-        t_prime = self.dropout(t_prime[:, 0, :])  # only global token
-
-        logits = self.classifier(t_prime.unsqueeze(1))
-
-        return logits
-
-# The Live Plotting Function
-def save_live_plot(history: dict, save_path: Path):
-    """Draws a detailed graph with points for every epoch and saves it."""
-    plt.figure(figsize=(14, 6))
+def save_plot(history, save_dir):
+    """Saves high-accuracy learning curves to Google Drive every epoch."""
+    plt.figure(figsize=(12, 5))
     
-    # Plot Accuracy
+    # Accuracy Plot
     plt.subplot(1, 2, 1)
-    plt.plot(history['train_acc'], marker='o', linestyle='-', color='blue', label='Train Accuracy')
-    plt.plot(history['val_acc'], marker='o', linestyle='-', color='green', label='Validation Accuracy')
-    plt.title('Accuracy over Epochs')
+    plt.plot(history['train_acc'], label='Train Acc', color='blue', marker='o')
+    plt.plot(history['val_acc'], label='Val Acc', color='green', marker='o')
+    plt.title('Epoch vs Accuracy')
     plt.xlabel('Epoch')
-    plt.ylabel('Accuracy (%)')
+    plt.ylabel('Accuracy')
     plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.grid(True, linestyle='--', alpha=0.6)
     
-    # Plot Loss
+    # Loss Plot
     plt.subplot(1, 2, 2)
-    plt.plot(history['train_loss'], marker='o', linestyle='-', color='red', label='Train Loss')
-    plt.title('Training Loss over Epochs')
+    plt.plot(history['train_loss'], label='Train Loss', color='red', marker='o')
+    plt.plot(history['val_loss'], label='Val Loss', color='orange', marker='o')
+    plt.title('Epoch vs Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.grid(True, linestyle='--', alpha=0.6)
     
     plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close() # Free up memory
+    plt.savefig(os.path.join(save_dir, "learning_curve.png"))
+    plt.close()
 
-def train_model():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset-type", type=str, default="RAF-DB")
-    parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--epochs", type=int, default=50) 
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=0.0001)
-    parser.add_argument("--save-dir", type=Path, default=Path("/content/drive/MyDrive/FER_Checkpoints"))
-    args = parser.parse_args()
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Starting High-Accuracy Training (ImageNet Backbone) on: {device}")
+def train_model(model, train_loader, val_loader, test_loader, device, epochs, lr, save_dir):
+    """
+    Orchestrates the training, validation, and testing phases.
+    Includes Label Smoothing and Adam Optimizer.
+    """
+    os.makedirs(save_dir, exist_ok=True)
     
-    args.save_dir.mkdir(parents=True, exist_ok=True)
-    graph_path = args.save_dir / "live_learning_curve.png"
-
-    # In RAF-DB, the 'test' folder is strictly used as our Validation Set during training.
-    train_loader, val_loader = create_dataloaders(
-        dataset_type=args.dataset_type,
-        root_dir=args.data_dir,
-        batch_size=args.batch_size
-    )
-
-    model = FERFullPipeline().to(device)
-
-    checkpoint_path = "/content/drive/MyDrive/FER_Checkpoints/best.pt"
-
-    if Path(checkpoint_path).exists():
-        print("Loading pretrained ResNet backbone weights...")
-
-        checkpoint = torch.load(
-            checkpoint_path,
-            map_location=device,
-            weights_only=False
-        )
-
-        # 1. Extract the raw ResNet weights
-        pretrained_dict = checkpoint.get("model_state_dict", checkpoint)
-
-        # 2. Filter out layers we explicitly deleted or don't want (like fc, layer3, layer4)
-        filtered_dict = {
-            k: v for k, v in pretrained_dict.items() 
-            if not k.startswith('fc.') and not k.startswith('layer3.') and not k.startswith('layer4.')
-        }
-
-        # 3. Load the filtered weights DIRECTLY into the backbone component
-        model.backbone.load_state_dict(filtered_dict, strict=False)
-        print("✅ Successfully injected checkpoint weights into the ResNet backbone!")
-
-    counts = Counter(train_loader.dataset.labels)
-    total = sum(counts.values())
-    weights = torch.tensor(
-        [total / counts[i] for i in sorted(counts.keys())],
-        dtype=torch.float32
-    ).to(device)
-
-    criterion = nn.CrossEntropyLoss(weight=weights)
-    optimizer = Adam(
-        [
-            {"params": model.backbone.layer2.parameters(), "lr": args.lr * 0.1},
-            {"params": model.lfa.parameters(), "lr": args.lr},
-            {"params": model.msgc.parameters(), "lr": args.lr},
-            {"params": model.safm.parameters(), "lr": args.lr},
-            {"params": model.frit.parameters(), "lr": args.lr},
-            {"params": model.classifier.parameters(), "lr": args.lr * 5},
-        ],
-        weight_decay=1e-4
-    )
-    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=3)
-
-    history = {'train_loss': [], 'train_acc': [], 'val_acc': []}
+    # Label smoothing (0.05) acts as a regularization to prevent overfitting
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    
     best_acc = 0.0
+    best_model_wts = copy.deepcopy(model.state_dict())
     
-    # Early Stopping Trackers
-    early_stop_patience = 7
-    epochs_without_improvement = 0
+    # Dictionary to store metrics for plotting
+    history = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
 
-    for epoch in range(args.epochs):
+    for epoch in range(epochs):
+        start_time = time.time()
+        
+        # --- 1. Training Phase ---
         model.train()
         running_loss = 0.0
-        correct = 0
-        total_samples = 0
+        running_corrects = 0
 
-        print(f"\nEpoch {epoch+1}/{args.epochs}")
-        print("-" * 20)
-
-        for batch_idx, (images, labels) in enumerate(train_loader):
+        for images, labels in train_loader:
             images, labels = images.to(device), labels.to(device)
-
+            
             optimizer.zero_grad()
             outputs = model(images)
             loss = criterion(outputs, labels)
+            
+            _, preds = torch.max(outputs, 1)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
+            
+            running_loss += loss.item() * images.size(0)
+            running_corrects += torch.sum(preds == labels.data)
 
-            running_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            total_samples += labels.size(0)
-            correct += (predicted == labels).sum().item()
+        epoch_train_loss = running_loss / len(train_loader.dataset)
+        epoch_train_acc = (running_corrects.double() / len(train_loader.dataset)).item()
 
-        epoch_loss = running_loss / len(train_loader)
-        train_acc = 100 * correct / total_samples
-        
-        # Validation Loop
+        # --- 2. Validation Phase (End of every epoch) ---
         model.eval()
-        val_correct = 0
-        val_total = 0
+        val_loss = 0.0
+        val_corrects = 0
+        
         with torch.no_grad():
             for images, labels in val_loader:
                 images, labels = images.to(device), labels.to(device)
                 outputs = model(images)
-                _, predicted = torch.max(outputs.data, 1)
-                val_total += labels.size(0)
-                val_correct += (predicted == labels).sum().item()
+                loss = criterion(outputs, labels)
+                _, preds = torch.max(outputs, 1)
+                
+                val_loss += loss.item() * images.size(0)
+                val_corrects += torch.sum(preds == labels.data)
+    
+        epoch_val_loss = val_loss / len(val_loader.dataset)
+        epoch_val_acc = (val_corrects.double() / len(val_loader.dataset)).item()
 
-        val_acc = 100 * val_correct / val_total
-        print(f"Train Loss: {epoch_loss:.4f} | Train Acc: {train_acc:.2f}% | Val Acc: {val_acc:.2f}%")
-        
-        scheduler.step(val_acc)
-        
-        # Update history and redraw the graph instantly
-        history['train_loss'].append(epoch_loss)
-        history['train_acc'].append(train_acc)
-        history['val_acc'].append(val_acc)
-        save_live_plot(history, graph_path)
-        print(f"📊 Graph updated at: {graph_path.name}")
+        # Update History Logs
+        history['train_loss'].append(epoch_train_loss)
+        history['val_loss'].append(epoch_val_loss)
+        history['train_acc'].append(epoch_train_acc)
+        history['val_acc'].append(epoch_val_acc)
 
-        # Save Checkpoint & Early Stopping Logic
-        if val_acc > best_acc:
-            best_acc = val_acc
-            epochs_without_improvement = 0 # Reset the clock
-            save_path = args.save_dir / f"pure_{args.dataset_type.lower()}_from_scratch.pt"
-            torch.save(model.state_dict(), save_path)
-            print(f"⭐ New best model saved! ({best_acc:.2f}%)")
-        else:
-            epochs_without_improvement += 1
-            print(f"⚠️ No improvement for {epochs_without_improvement} epoch(s).")
-            
-            if epochs_without_improvement >= early_stop_patience:
-                print(f"\n🛑 EARLY STOPPING TRIGGERED! The model stopped learning general rules. Halting to save your best weights.")
-                break # Kills the loop
+        print(f"Epoch [{epoch+1}/{epochs}] | Train Acc: {epoch_train_acc:.4f} | "
+              f"Val Acc: {epoch_val_acc:.4f} | Time: {time.time() - start_time:.1f}s")
+
+        # Automatically update the Live Graph in your Google Drive folder
+        save_plot(history, save_dir)
+
+        # Checkpoint: Save weights if validation accuracy improved
+        if epoch_val_acc > best_acc:
+            best_acc = epoch_val_acc
+            best_model_wts = copy.deepcopy(model.state_dict())
+            torch.save(model.state_dict(), os.path.join(save_dir, "best_emotion_model.pt"))
+            print(f"⭐ New Best Model Saved! Accuracy: {best_acc:.4f}")
+
+    # --- 3. Final Test Phase (The Unseen Set) ---
+    print("\n🔍 Running Final Evaluation on the Test Set...")
+    model.load_state_dict(best_model_wts)
+    model.eval()
+    test_corrects = 0
+    
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            _, preds = torch.max(outputs, 1)
+            test_corrects += torch.sum(preds == labels.data)
+    
+    final_test_acc = (test_corrects.double() / len(test_loader.dataset)).item()
+    print(f"✅ Final Test Accuracy: {final_test_acc:.4f}")
+
+    # --- 4. ONNX Export (For deployment) ---
+    try:
+        dummy_input = torch.randn(1, 3, 224, 224).to(device)
+        onnx_path = os.path.join(save_dir, "best_emotion_model.onnx")
+        torch.onnx.export(model, dummy_input, onnx_path, opset_version=11)
+        print(f"📦 Exported ONNX model: {onnx_path}")
+    except Exception as e:
+        print(f"⚠️ ONNX export skipped: {e}")
+
+    return model, history
 
 if __name__ == "__main__":
-    train_model()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train-dir", type=str, required=True)
+    parser.add_argument("--val-dir", type=str, required=True)
+    parser.add_argument("--test-dir", type=str, required=True)
+    parser.add_argument("--epochs", type=int, default=40)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--save-dir", type=str, default="/content/drive/MyDrive/FER_Checkpoints")
+    args = parser.parse_args()
+
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"🚀 Initializing High-Accuracy Pipeline on: {DEVICE}")
+
+    # 1. Load your balanced, augmented data
+    train_loader, val_loader, test_loader, _, _, _ = get_dataloaders(
+        args.train_dir, args.val_dir, args.test_dir, args.batch_size
+    )
+
+    # 2. Initialize the Assembly
+    model = FERFullPipeline(num_classes=7).to(DEVICE)
+
+    # 3. Start Training
+    train_model(
+        model, 
+        train_loader, 
+        val_loader, 
+        test_loader, 
+        DEVICE, 
+        args.epochs, 
+        args.lr, 
+        args.save_dir
+    )
