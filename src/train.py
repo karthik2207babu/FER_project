@@ -28,12 +28,19 @@ from tokenization_stage.tokenization_module import RegionTokenization
 from frit_stage.frit_module import FRITTransformer
 from classification_stage.classification_module import EmotionClassifier
 
+import os
+import sys
 import pathlib
 import torch.serialization
 
-torch.serialization.add_safe_globals({
-    pathlib.WindowsPath: pathlib.PosixPath
-})
+# 1. Trick the unpickler into finding the removed _local module
+sys.modules["pathlib._local"] = pathlib
+
+# 2. Automatically handle cross-OS path translation (Windows <-> Posix)
+if os.name == 'nt':
+    pathlib.PosixPath = pathlib.WindowsPath
+else:
+    pathlib.WindowsPath = pathlib.PosixPath
 
 
 class FERFullPipeline(nn.Module):
