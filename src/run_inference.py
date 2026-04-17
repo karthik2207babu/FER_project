@@ -3,7 +3,7 @@ import torch
 from PIL import Image
 from torchvision import transforms
 from pathlib import Path
-from src.model import FERFullPipeline # Corrected import for your folder structure
+from model import FERFullPipeline
 
 def run_team_inference():
     # 1. Config
